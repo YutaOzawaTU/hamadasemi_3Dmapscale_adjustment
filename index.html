@@ -195,25 +195,26 @@
     }
 
     // ---- NetCDF (.nc) 読み込みとパース ----
-    async function loadNetCDFFile(file) {
-      clearStatus();
-      setBusy('NetCDF を解析中...');
-      try {
-        currentFileName = (file && file.name) ? file.name.replace(/\\.[^.]+$/, '') : 'terrain';
-        const h5 = await importH5Wasm();
-        if (h5 && h5.ready) {
-          try { await h5.ready; } catch (e){}
-        }
+  async function loadNetCDFFile(file) {
+  clearStatus();
+  setBusy('NetCDF を解析中...');
+  try {
+    currentFileName = (file && file.name) ? file.name.replace(/\.[^.]+$/, '') : 'terrain';
+    const h5 = await importH5Wasm();
+    if (h5 && h5.ready) {
+      try { await h5.ready; } catch (e){}
+    }
 
-        const ab = await file.arrayBuffer();
-        // write to h5wasm FS
-        try {
-          h5.FS.writeFile(file.name, new Uint8Array(ab));
-        } catch (fsErr) {
-          throw new Error('FS.writeFile failed: '+(fsErr && fsErr.message ? fsErr.message : String(fsErr)));
-        }
+    const ab = await file.arrayBuffer();
+    // write to h5wasm FS
+    try {
+      h5.FS.writeFile(file.name, new Uint8Array(ab));
+    } catch (fsErr) {
+      throw new Error('FS.writeFile failed: '+(fsErr && fsErr.message ? fsErr.message : String(fsErr)));
+    }
 
-        const f = new h5.File(file.name, 'r');
+    const f = new h5.File(file.name, 'r');
+
         try {
           const rootKeys = f.keys ? f.keys() : [];
           const elevCandidates = ['elevation','z','bathymetry','bedrock'];
@@ -546,3 +547,4 @@
   </script>
 </body>
 </html>
+
