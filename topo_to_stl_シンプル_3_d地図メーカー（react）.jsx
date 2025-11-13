@@ -42,54 +42,72 @@ function scalePositionsFromGeometry(g: THREE.BufferGeometry, scale: number) {
   return arr;
 }
 
-// ---------- h5wasm の堅牢な読み込み ----------
+// --- ここを既存の importModuleFromUrlAsBlob / importH5Wasm と丸ごと置換してください ---
 async function importModuleFromUrlAsBlob(url: string): Promise<any> {
+  // base URL used to locate wasm files (e.g. https://cdn.jsdelivr.net/npm/h5wasm@0.4.9/dist/esm/)
+  const base = url.slice(0, url.lastIndexOf("/") + 1);
+
+  // Ensure Emscripten locateFile is set before module initialization so .wasm is fetched from CDN base.
+  (globalThis as any).Module = (globalThis as any).Module || {};
+  (globalThis as any).Module.locateFile = (path: string) => {
+    // If path already looks like absolute URL, return it; otherwise prefix with base
+    if (/^https?:\\/\\//.test(path)) return path;
+    return base + path;
+  };
+
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`fetch failed: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new Error(`fetch failed: ${res.status} ${res.statusText} (${url})`);
   const code = await res.text();
   const blob = new Blob([code], { type: "text/javascript" });
   const blobUrl = URL.createObjectURL(blob);
+
   try {
-    // bundler による書き換えを回避し、ブラウザが直接 blob を import する
+    // Import the blob URL to avoid bundler resolving at build time.
     const mod = await import(/* @vite-ignore */ blobUrl);
     return mod.default || mod;
   } finally {
-    URL.revokeObjectURL(blobUrl);
+    // revoke after a short delay to reduce risk of breaking module internals that may still refer to it
+    setTimeout(() => { try { URL.revokeObjectURL(blobUrl); } catch(_) {} }, 2000);
   }
 }
 
 async function importH5Wasm(): Promise<any> {
-  let lastErr: any = null;
-  try {
-    // まず通常のパッケージ名で試す
-    const m = await import("h5wasm");
-    return (m && (m.default || m));
-  } catch (e) {
-    lastErr = e;
-  }
-  try {
-    // 一部環境でパッケージスぺックが効くことがある
-    const m = await import("h5wasm@0.4.9/dist/esm/hdf5_hl.js");
-    return (m && (m.default || m));
-  } catch (e) {
-    lastErr = e;
-  }
-
-  // 最後に CDN を fetch -> blob -> import で回避
-  const cdnList = [
+  // Ordered list of CDN candidates (jsdelivr preferred, then unpkg)
+  const cdnCandidates = [
     "https://cdn.jsdelivr.net/npm/h5wasm@0.4.9/dist/esm/hdf5_hl.js",
-    "https://unpkg.com/h5wasm@0.4.9/dist/esm/hdf5_hl.js",
+    "https://unpkg.com/h5wasm@0.4.9/dist/esm/hdf5_hl.js"
   ];
-  for (const url of cdnList) {
+
+  let lastErr: any = null;
+  for (const url of cdnCandidates) {
     try {
       const mod = await importModuleFromUrlAsBlob(url);
+      // Some builds expose .ready (Promise-like). Wait if available.
+      if (mod && (mod as any).ready) {
+        try { await (mod as any).ready; } catch (e) { /* ignore; we'll surface below if broken */ }
+      }
       return mod;
     } catch (e) {
+      console.warn("importH5Wasm: attempt failed for", url, e);
       lastErr = e;
     }
   }
-  throw lastErr || new Error("h5wasm import failed");
+
+  // As a last fallback, try a bare import (rarely works in built bundles but harmless to attempt)
+  try {
+    const bare = await import("h5wasm").catch(() => null);
+    if (bare) {
+      if ((bare as any).ready) await (bare as any).ready;
+      return (bare && (bare.default || bare));
+    }
+  } catch (e) {
+    lastErr = lastErr || e;
+  }
+
+  throw lastErr || new Error("importH5Wasm: all attempts failed");
 }
+// --- ここまで置換 ---
+
 
 // ---------- メインコンポーネント ----------
 export default function TopoToSTLApp(): JSX.Element {
