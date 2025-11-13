@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Topo to STL — 3D地形 to STL</title>
+  <meta name="description" content="NetCDF (GEBCO 等) をブラウザで読み込み、3D表示→STL出力するツール（単一ファイル）。" />
+  <style>
+    /* シンプルなレイアウト（Tailwind 等不要） */
+    :root{--bg:#f8fafc;--card:#fff;--muted:#6b7280}
+    html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;background:linear-gradient(#fff,#f1f5f9)}
+    .container{max-width:1200px;margin:18px auto;padding:16px;display:grid;grid-template-columns:1fr 2fr;gap:16px}
+    .card{background:var(--card);border-radius:12px;padding:14px;box-shadow:0 1px 6px rgba(2,6,23,0.06);border:1px solid rgba(15,23,42,0.04)}
+    h1{margin:0;font-size:20px}
+    label{display:block;font-size:13px;color:#111827;margin-bottom:6px}
+    .muted{color:var(--muted);font-size:13px}
+    .row{display:flex;gap:8px;align-items:center}
+    input[type="range"]{width:100%}
+    input[type="number"]{padding:6px;border-radius:6px;border:1px solid #d1d5db}
+    button{background:#4f46e5;color:white;padding:8px 10px;border-radius:8px;border:0;cursor:pointer}
+    button.secondary{background:#10b981}
+    button.gray{background:#9ca3af}
+    #mount{width:100%;height:74vh;border-radius:8px;overflow:hidden}
+    .small{font-size:12px;color:#374151}
+    .notice{font-size:12px;color:#6b7280;margin-top:8px}
+    .flex{display:flex;gap:8px}
+    .pill{background:#eef2ff;padding:6px 8px;border-radius:999px;font-size:12px}
+    a.link{color:#065f46;text-decoration:underline}
+    pre.debug{background:#111827;color:#fff;padding:10px;border-radius:8px;overflow:auto;max-height:220px}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card" style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <h1>Topo to STL — 3D地形メーカー</h1>
+          <div class="muted">NetCDF（.nc）を読み込み、視覚化 → STLダウンロード</div>
+        </div>
+        <div style="text-align:right">
+          <a class="link" href="https://download.gebco.net/" target="_blank" rel="noreferrer">GEBCO ダウンロード ↗</a><br>
+          <span class="pill">STL 単位：デフォルト mm</span>
+        </div>
+      </div>
+
+      <div>
+        <label>1) NetCDFファイルを選択 (.nc)</label>
+        <input id="file" type="file" accept=".nc,application/x-netcdf,application/netcdf" />
+        <div class="notice">NetCDF4 (CF 準拠) を推奨。アップロード後、解析して3D表示します。</div>
+      </div>
+
+      <div>
+        <label>2) 可視化の調整</label>
+        <div class="muted small">縦方向の誇張 (Z): <span id="zVal">1.00×</span></div>
+        <div class="row">
+          <input id="zRange" type="range" min="0.1" max="20" step="0.1" value="1">
+          <input id="zNum" type="number" min="0.1" max="20" step="0.1" value="1" style="width:80px">
+        </div>
+        <div class="small" style="margin-top:6px">
+          プリセット：
+          <button class="gray" data-z="0.5">0.5×</button>
+          <button class="gray" data-z="1">1×</button>
+          <button class="gray" data-z="2">2×</button>
+          <button class="gray" data-z="5">5×</button>
+          <button class="gray" data-z="10">10×</button>
+        </div>
+
+        <div style="margin-top:12px">
+          <label>台座の厚み（m） <span class="muted small">(携行を考え薄め推奨: 5〜30)</span></label>
+          <input id="baseNum" type="number" step="1" min="0" value="20" style="width:100px">
+        </div>
+
+        <div style="margin-top:12px">
+          <label>間引き（行/列の最大）</label>
+          <input id="maxDim" type="range" min="200" max="1200" step="50" value="900">
+          <div class="small muted">値を小さくすると軽くなります（細部は減少）。</div>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:12px;align-items:center">
+          <label style="margin:0">エクスポート単位</label>
+          <select id="unit">
+            <option value="mm">mm（3Dプリンタ既定）</option>
+            <option value="m">m</option>
+          </select>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button id="exportBtn" disabled>STLをダウンロード</button>
+          <button id="testBtn" class="secondary">内部テスト実行</button>
+        </div>
+
+        <div id="status" class="muted small" style="margin-top:8px"></div>
+      </div>
+
+      <div>
+        <details>
+          <summary class="small">開発者用 / デバッグ</summary>
+          <div style="margin-top:8px">
+            <button id="checkH5" class="gray">h5wasm 接続テスト</button>
+            <div id="dbg" style="margin-top:8px"></div>
+            <pre id="dbgOut" class="debug" style="display:none"></pre>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <div>
+      <div id="mount" class="card"></div>
+    </div>
+  </div>
+
+  <script type="module">
+  // ---- 依存モジュール（ESM CDN） ----
+  import * as THREE from "https://unpkg.com/three@0.155.0/build/three.module.js";
+  import { OrbitControls } from "https://unpkg.com/three@0.155.0/examples/jsm/controls/OrbitControls.js";
+  import { STLExporter } from "https://unpkg.com/three@0.155.0/examples/jsm/exporters/STLExporter.js";
+
+  // ---- ユーティリティ ----
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $("status");
+  const dbgEl = $("dbg");
+  const dbgOut = $("dbgOut");
+
+  function setStatus(s){
+    statusEl.textContent = s || "";
+  }
+  function dbg(msg){
+    dbgEl.textContent = String(msg || "");
+  }
+  function dbgLog(text){
+    dbgOut.style.display = "block";
+    dbgOut.textContent = (dbgOut.textContent || "") + text + "\n";
+  }
+
+  function clamp(n,min,max){ return Math.max(min, Math.min(max, n)); }
+
+  // Viridis (簡易)
+  function viridis(t){
+    t = Math.max(0,Math.min(1,t));
+    const a=[0.280268,0.165368,0.476043], b=[0.23393,0.472705,0.310964], c=[0.043831,0.530361,0.393395];
+    const d=[2.0,1.5,1.0], e=[0.0,0.5,1.0];
+    const r=a[0]+b[0]*Math.pow(t,d[0])+c[0]*Math.pow(t,e[0]);
+    const g=a[1]+b[1]*Math.pow(t,d[1])+c[1]*Math.pow(t,e[1]);
+    const bl=a[2]+b[2]*Math.pow(t,d[2])+c[2]*Math.pow(t,e[2]);
+    return [Math.min(1,Math.max(0,r)),Math.min(1,Math.max(0,g)),Math.min(1,Math.max(0,bl))];
+  }
+
+  // ---- h5wasm の安全な読み込み (fetch->blob->import のフォールバックを使用) ----
+  async function importModuleFromUrlAsBlob(url){
+    // url の重複プレフィックスエラーを避ける（既知の問題）
+    const res = await fetch(url);
+    if(!res.ok) throw new Error(`fetch failed ${res.status}`);
+    const code = await res.text();
+    const blob = new Blob([code], { type: "text/javascript" });
+    const blobUrl = URL.createObjectURL(blob);
+    try{
+      const m = await import(/* @vite-ignore */ blobUrl);
+      return m.default || m;
+    } finally {
+      URL.revokeObjectURL(blobUrl);
+    }
+  }
+
+  async function importH5Wasm(){
+    // まず通常の import を試す（ブラウザ環境による差に対応）
+    try {
+      const m = await import("https://cdn.jsdelivr.net/npm/h5wasm@0.4.9/dist/esm/hdf5_hl.js");
+      return m.default || m;
+    } catch (e) {
+      // 最後の手段として fetch->blob->import
+      const cdn = "https://cdn.jsdelivr.net/npm/h5wasm@0.4.9/dist/esm/hdf5_hl.js";
+      return await importModuleFromUrlAsBlob(cdn);
+    }
+  }
+
+  // ---- Three.js セットアップ ----
+  const mount = $("mount");
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xf7fafc);
+  const camera = new THREE.PerspectiveCamera(45, mount.clientWidth/mount.clientHeight, 0.1, 1e9);
+  camera.position.set(0, -2000, 1500);
+  camera.up.set(0,0,1);
+
+  const renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+  renderer.setSize(mount.clientWidth, mount.clientHeight);
+  mount.appendChild(renderer.domElement);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+
+  const hemi = new THREE.HemisphereLight(0xffffff,0x888888,0.9); scene.add(hemi);
+  const dir = new THREE.DirectionalLight(0xffffff,0.8); dir.position.set(1000,-1000,2000); scene.add(dir);
+
+  window.addEventListener("resize",()=>{ const w=mount.clientWidth, h=mount.clientHeight; camera.aspect=w/h; camera.updateProjectionMatrix(); renderer.setSize(w,h); });
+
+  let mesh = null;
+  function animate(){ requestAnimationFrame(animate); controls.update(); renderer.render(scene,camera); }
+  animate();
+
+  // ---- グリッドからメッシュ作成ロジック（簡易版） ----
+  function calcSteps(R,C,maxDim){
+    const stepY = Math.max(1, Math.ceil(R / maxDim));
+    const stepX = Math.max(1, Math.ceil(C / maxDim));
+    let estRows = Math.ceil(R/stepY), estCols = Math.ceil(C/stepX);
+    let factor = 1;
+    while(estRows*estCols*2 > 1500000){ factor++; if(factor>20) break; }
+    return { stepY: stepY*factor, stepX: stepX*factor };
+  }
+
+  function buildSolidGeometry(lats, lons, Zarr, shape, exag, base, maxDim){
+    // lats, lons: typed arrays; Zarr: 1D array row-major (R x C)
+    const R = shape[0], C = shape[1];
+    const {stepY, stepX} = calcSteps(R,C,maxDim);
+    const rows1 = Math.ceil(R/stepY), cols1 = Math.ceil(C/stepX);
+    const avgLat = (lats[0] + lats[lats.length-1]) / 2 * Math.PI/180;
+    const mPerDegLat = 111320;
+    const mPerDegLon = 111320 * Math.cos(avgLat);
+
+    const rowsIdx = new Array(rows1), colsIdx = new Array(cols1);
+    for(let i=0,v=0;i<rows1;i++,v+=stepY) rowsIdx[i]=Math.min(v,R-1);
+    for(let j=0,v=0;j<cols1;j++,v+=stepX) colsIdx[j]=Math.min(v,C-1);
+
+    const lat0 = lats[rowsIdx[0]], lon0 = lons[colsIdx[0]];
+    const topVerts = rows1*cols1;
+    const totalVerts = topVerts*2;
+
+    const positions = new Float32Array(totalVerts*3);
+    const colors = new Float32Array(totalVerts*3);
+    let p=0, ci=0;
+
+    let zMin=Infinity, zMax=-Infinity;
+    for(let ii=0;ii<rows1;ii++){
+      for(let jj=0;jj<cols1;jj++){
+        const i0=rowsIdx[ii], j0=colsIdx[jj];
+        const z = Number(Zarr[i0*C + j0]) * exag;
+        if(z<zMin) zMin=z; if(z>zMax) zMax=z;
+      }
+    }
+
+    const bottomZ = zMin - Math.abs(base);
+
+    // top vertices
+    for(let ii=0;ii<rows1;ii++){
+      const i0=rowsIdx[ii];
+      const y = (lats[i0] - lat0) * mPerDegLat;
+      for(let jj=0;jj<cols1;jj++){
+        const j0=colsIdx[jj];
+        const x = (lons[j0] - lon0) * mPerDegLon;
+        const z = Number(Zarr[i0*C + j0]) * exag;
+        positions[p++]=x; positions[p++]=y; positions[p++]=z;
+        colors[ci++]=0; colors[ci++]=0; colors[ci++]=0;
+      }
+    }
+    // bottom vertices
+    for(let ii=0;ii<rows1;ii++){
+      for(let jj=0;jj<cols1;jj++){
+        const baseIdx = (ii*cols1 + jj)*3;
+        positions[p++]=positions[baseIdx+0];
+        positions[p++]=positions[baseIdx+1];
+        positions[p++]=bottomZ;
+        colors[ci++]=0.2; colors[ci++]=0.2; colors[ci++]=0.2;
+      }
+    }
+
+    // colorize top by viridis
+    const dz = Math.max(1e-6, zMax - zMin);
+    for(let ii=0;ii<rows1;ii++){
+      for(let jj=0;jj<cols1;jj++){
+        const idxTop = ii*cols1 + jj;
+        const z = positions[idxTop*3 + 2];
+        const t = clamp((z - zMin)/dz, 0, 1);
+        const [r,g,b] = viridis(t);
+        const ci2 = idxTop*3;
+        colors[ci2]=r; colors[ci2+1]=g; colors[ci2+2]=b;
+      }
+    }
+
+    const faces = [];
+    const top = (r,c)=> r*cols1 + c;
+    const bottom = (r,c)=> topVerts + r*cols1 + c;
+
+    for(let i=0;i<rows1-1;i++){
+      for(let j=0;j<cols1-1;j++){
+        const v0=top(i,j), v1=top(i,j+1), v2=top(i+1,j), v3=top(i+1,j+1);
+        faces.push(v0,v1,v3, v0,v3,v2);
+      }
+    }
+    // sides (top edge -> bottom)
+    for(let j=0;j<cols1-1;j++){
+      const a=top(0,j), b=top(0,j+1), A=bottom(0,j), B=bottom(0,j+1);
+      faces.push(a,A,B, a,B,b);
+    }
+    for(let j=0;j<cols1-1;j++){
+      const a=top(rows1-1,j), b=top(rows1-1,j+1), A=bottom(rows1-1,j), B=bottom(rows1-1,j+1);
+      faces.push(a,b,B, a,B,A);
+    }
+    for(let i=0;i<rows1-1;i++){
+      const a=top(i,0), b=top(i+1,0), A=bottom(i,0), B=bottom(i+1,0);
+      faces.push(a,A,B, a,B,b);
+    }
+    for(let i=0;i<rows1-1;i++){
+      const a=top(i,cols1-1), b=top(i+1,cols1-1), A=bottom(i,cols1-1), B=bottom(i+1,cols1-1);
+      faces.push(a,b,B, a,B,A);
+    }
+    // bottom faces
+    for(let i=0;i<rows1-1;i++){
+      for(let j=0;j<cols1-1;j++){
+        const v0=bottom(i,j), v1=bottom(i,j+1), v2=bottom(i+1,j), v3=bottom(i+1,j+1);
+        faces.push(v0,v3,v1, v0,v2,v3);
+      }
+    }
+
+    // build BufferGeometry
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    geom.setIndex(faces);
+    geom.computeVertexNormals();
+    geom.computeBoundingBox();
+    const bb = geom.boundingBox;
+    const size = new THREE.Vector3();
+    if(bb) bb.getSize(size);
+    return { geom, rows1, cols1, size, bottomZ };
+  }
+
+  // ---- UI 振る舞い ----
+  const fileInput = $("file");
+  const zRange = $("zRange"), zNum = $("zNum"), zVal = $("zVal");
+  const baseNum = $("baseNum"), maxDim = $("maxDim"), unitSel = $("unit"), exportBtn = $("exportBtn"), testBtn = $("testBtn");
+  const checkH5 = $("checkH5");
+
+  function syncZFromRange(){
+    const v = parseFloat(zRange.value);
+    zNum.value = v.toFixed(1);
+    zVal.textContent = v.toFixed(2) + "×";
+    if(mesh) updateMeshExaggeration(v);
+  }
+  function syncZFromNum(){
+    let v = parseFloat(zNum.value || "1");
+    v = clamp(v,0.1,20);
+    zRange.value = v;
+    zVal.textContent = v.toFixed(2) + "×";
+    if(mesh) updateMeshExaggeration(v);
+  }
+  zRange.addEventListener("input", syncZFromRange);
+  zNum.addEventListener("change", syncZFromNum);
+
+  document.querySelectorAll("button.gray[data-z]").forEach(b=>{
+    b.addEventListener("click", ()=>{ const v = parseFloat(b.dataset.z); zRange.value=v; syncZFromRange(); });
+  });
+
+  function enableExport(flag){
+    exportBtn.disabled = !flag;
+    exportBtn.style.opacity = flag?1:0.6;
+  }
+
+  enableExport(false);
+
+  // ---- メッシュ更新（誇張・台座を現行設定で再作成） ----
+  async function updateMeshExaggeration(newExag){
+    // If original grid stored, rebuild
+    if(!window._grid) return;
+    setStatus("メッシュ更新中…");
+    const {lats,lons,Z,shape} = window._grid;
+    // rebuild geometry
+    const base = parseFloat(baseNum.value || "20");
+    const maxD = parseInt(maxDim.value);
+    const { geom, size } = buildSolidGeometry(lats,lons,Z,shape, newExag, base, maxD);
+    if(mesh){ scene.remove(mesh); mesh.geometry.dispose(); mesh.material.dispose(); mesh=null; }
+    const mat = new THREE.MeshStandardMaterial({ vertexColors:true, metalness:0.1, roughness:0.8, side: THREE.DoubleSide });
+    mesh = new THREE.Mesh(geom, mat);
+    scene.add(mesh);
+    // adjust camera
+    const diag = Math.max(size.x||1,size.y||1,size.z||1);
+    const dist = diag * 1.6 + 1;
+    camera.position.set(-dist*0.6, -dist*0.6, dist*0.6);
+    controls.target.set((size.x||0)*0.5, (size.y||0)*0.5, (size.z||0)*0.2);
+    controls.update();
+    setStatus("");
+  }
+
+  // ---- ファイル読込とパース ----
+  fileInput.addEventListener("change", async (ev)=>{
+    const f = ev.target.files && ev.target.files[0];
+    if(!f) return;
+    setStatus("解析中…");
+    dbgOut.textContent = ""; dbgOut.style.display="none";
+    try {
+      const h5 = await importH5Wasm();
+      // h5.ready may be promise-like
+      if(h5 && h5.ready) { await h5.ready; }
+      // h5.FS may exist; many builds provide a virtual FS. But we can use File/Blob reading if API allows.
+      // We'll write to FS if available, else pass ArrayBuffer to h5.File constructor if supported.
+      const ab = await f.arrayBuffer();
+      if(h5.FS && typeof h5.FS.writeFile === "function"){
+        try { h5.FS.writeFile(f.name, new Uint8Array(ab)); } catch(e){ console.warn("FS.writeFile failed",e); }
+      }
+      // open file
+      const fileObj = new h5.File(f.name, "r");
+      // If that fails, try constructor with buffer (some h5wasm builds support h5.File.from)
+      // gather top-level keys
+      const keys = fileObj.keys ? fileObj.keys() : [];
+      // locate candidate names
+      const elevCandidates = ["elevation","z","bathymetry","bedrock"];
+      const latCandidates = ["lat","latitude","y"];
+      const lonCandidates = ["lon","longitude","x"];
+      function findFirstIn(keysArr,cands){
+        for(const k of keysArr){
+          for(const c of cands) if(k.toLowerCase().includes(c)) return k;
+        }
+        return null;
+      }
+      let elevKey = findFirstIn(keys,elevCandidates);
+      let latKey = findFirstIn(keys,latCandidates);
+      let lonKey = findFirstIn(keys,lonCandidates);
+
+      // deep search helper
+      function deepSearch(groupPath=""){
+        const grp = groupPath ? fileObj.get(groupPath) : fileObj;
+        const ks = grp.keys ? grp.keys() : [];
+        for(const k of ks){
+          const full = groupPath ? `${groupPath}/${k}` : k;
+          const obj = grp.get ? grp.get(k) : null;
+          if(!obj) continue;
+          const isDataset = !!obj.value || !!obj.metadata;
+          if(isDataset){
+            if(!elevKey && elevCandidates.some(c=>k.toLowerCase().includes(c))) elevKey = full;
+            if(!latKey && latCandidates.some(c=>k.toLowerCase().includes(c))) latKey = full;
+            if(!lonKey && lonCandidates.some(c=>k.toLowerCase().includes(c))) lonKey = full;
+          } else {
+            deepSearch(full);
+          }
+        }
+      }
+      if(!elevKey || !latKey || !lonKey) deepSearch("");
+
+      if(!elevKey || !latKey || !lonKey){
+        throw new Error("必要な変数（elevation, lat, lon）が見つかりません。ファイル構造を確認してください。");
+      }
+
+      const Zds = fileObj.get(elevKey);
+      const latds = fileObj.get(latKey);
+      const londs = fileObj.get(lonKey);
+
+      const shape = Zds.shape || [0,0];
+      if(!shape || shape.length!==2) throw new Error("標高データが2次元ではありません");
+
+      const rows = shape[0], cols = shape[1];
+      if(rows*cols > 150_000_000) throw new Error("グリッドが大きすぎます（領域を絞ってください）");
+
+      const Zraw = Zds.value; // typed array
+      const lats = latds.value;
+      const lons = londs.value;
+
+      // store for later rebuilds
+      window._grid = { lats, lons, Z: Zraw, shape: [rows, cols] };
+
+      // build mesh
+      const exag = parseFloat(zRange.value);
+      const base = parseFloat(baseNum.value || "20");
+      const maxD = parseInt(maxDim.value);
+      const { geom, size } = buildSolidGeometry(lats,lons,Zraw,[rows,cols],exag,base,maxD);
+
+      if(mesh){ scene.remove(mesh); mesh.geometry.dispose(); mesh.material.dispose(); mesh=null; }
+      const mat = new THREE.MeshStandardMaterial({ vertexColors:true, metalness:0.1, roughness:0.8, side:THREE.DoubleSide });
+      mesh = new THREE.Mesh(geom, mat);
+      scene.add(mesh);
+
+      enableExport(true);
+      setStatus(`ロード完了: ${f.name} — グリッド ${rows}×${cols} — 標高範囲 約 ${Math.round(Math.min(...Zraw))}〜${Math.round(Math.max(...Zraw))} m`);
+      // adjust camera
+      const diag = Math.max(size.x||1,size.y||1,size.z||1);
+      const dist = diag * 1.6 + 1;
+      camera.position.set(-dist*0.6, -dist*0.6, dist*0.6);
+      controls.target.set((size.x||0)*0.5, (size.y||0)*0.5, (size.z||0)*0.2);
+      controls.update();
+
+      try{ fileObj.close?.(); }catch(e){}
+    } catch(err){
+      console.error(err);
+      setStatus("エラー: " + (err.message || String(err)));
+      dbgLog(String(err.stack||err));
+    }
+  });
+
+  // ---- STL エクスポート ----
+  function scalePositionsFromGeometry(g, scale){
+    const pos = g.getAttribute("position");
+    const n = pos.count;
+    const out = new Float32Array(n*3);
+    for(let i=0;i<n;i++){
+      out[i*3+0] = pos.getX(i)*scale;
+      out[i*3+1] = pos.getY(i)*scale;
+      out[i*3+2] = pos.getZ(i)*scale;
+    }
+    return out;
+  }
+
+  exportBtn.addEventListener("click", ()=>{
+    if(!mesh) return;
+    const scale = unitSel.value === "mm" ? 1000 : 1;
+    // clone geometry with scaled positions
+    const g = mesh.geometry;
+    const arr = scalePositionsFromGeometry(g, scale);
+    const g2 = new THREE.BufferGeometry();
+    g2.setAttribute("position", new THREE.BufferAttribute(arr, 3));
+    g2.setIndex(g.index ? g.index.array : null);
+    g2.computeVertexNormals();
+    const m2 = new THREE.MeshStandardMaterial({ side:THREE.DoubleSide });
+    const mesh2 = new THREE.Mesh(g2, m2);
+    const exporter = new STLExporter();
+    const arraybuffer = exporter.parse(mesh2, { binary:true });
+    const blob = new Blob([arraybuffer], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const base = (window._gridFilename || "terrain").replace(/\.[^.]+$/,"");
+    a.href = url; a.download = `${base}_solid_${unitSel.value}.stl`; a.click();
+    setTimeout(()=>URL.revokeObjectURL(url), 5000);
+  });
+
+  // ---- 内部テスト ----
+  testBtn.addEventListener("click", ()=>{
+    dbgOut.textContent = ""; dbgOut.style.display="none";
+    try{
+      dbg("テスト実行中…");
+      // small synthetic grid 3x3
+      const lats = new Float64Array([0,0.1,0.2]);
+      const lons = new Float64Array([0,0.1,0.2]);
+      const Z = new Float32Array([0,1,2,3,4,5,6,7,8]);
+      const { geom } = buildSolidGeometry(lats,lons,Z,[3,3],1,10,999);
+      const pos = geom.getAttribute("position"), idx = geom.index;
+      const posCount = pos?pos.count:0, idxCount = idx?idx.count:0;
+      dbgLog(`buildSolidGeometry 3x3 -> pos=${posCount}, idx=${idxCount}`);
+      dbg("テスト完了。詳細はデバッグ出力を参照。");
+    }catch(e){
+      dbg("テストで例外発生");
+      dbgLog(String(e.stack||e));
+    }
+  });
+
+  // ---- h5wasm 接続テストボタン ----
+  checkH5.addEventListener("click", async ()=>{
+    dbgOut.textContent=""; dbgOut.style.display="none";
+    dbg("h5wasm を取得中…");
+    try{
+      const m = await importH5Wasm();
+      dbg("取得成功: h5wasm OK");
+      dbgLog("h5wasm module loaded: " + (typeof m));
+    }catch(e){
+      dbg("取得失敗: " + e.message);
+      dbgLog(String(e.stack||e));
+    }
+  });
+
+  // keep track of filename for exports
+  fileInput.addEventListener("change",(e)=>{ if(e.target.files && e.target.files[0]) window._gridFilename = e.target.files[0].name; });
+
+  </script>
+</body>
+</html>
